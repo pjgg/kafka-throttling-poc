@@ -10,10 +10,7 @@ import javax.inject.Singleton;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
@@ -21,18 +18,6 @@ public class KafkaProviders {
 
     @ConfigProperty(name = "kafka.bootstrap.servers", defaultValue = "localhost:9092")
     String kafkaBootStrap;
-
-    @Singleton
-    @Produces
-    @Named("kafka-producer")
-    KafkaProducer<String, String> getProducer() {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBootStrap);
-        props.put(ProducerConfig.CLIENT_ID_CONFIG, "test-producer");
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        return new KafkaProducer<>(props);
-    }
 
     @Singleton
     @Produces

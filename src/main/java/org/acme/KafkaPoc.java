@@ -4,10 +4,8 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.event.Observes;
@@ -17,12 +15,16 @@ import javax.inject.Named;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.OnOverflow;
 import org.jboss.logging.Logger;
 
 import io.quarkus.runtime.StartupEvent;
+import io.smallrye.common.constraint.NotNull;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.Uni;
 
 @ApplicationScoped
 public class KafkaPoc {
@@ -30,7 +32,6 @@ public class KafkaPoc {
     private static final Logger LOG = Logger.getLogger(KafkaPoc.class);
 
     private static final String TOPIC = "hello";
-    private static final int AMOUNT_EVENTS = 100;
     private static final int KAFKA_POLL_DURATION_SEC = 10;
     private static final int TPS_LIMIT = 3;
     private static final int INITIAL_EVENTS_AMOUNT = 0;
@@ -40,17 +41,21 @@ public class KafkaPoc {
     private KafkaConsumer<String, String> kafkaConsumer;
 
     @Inject
-    @Named("kafka-producer")
-    private KafkaProducer<String, String> kafkaProducer;
+    @Channel("producer-source")
+    @OnOverflow(value = OnOverflow.Strategy.DROP)
+    Emitter<String> emitter;
 
-    public void initialize(@Observes StartupEvent ev) throws ExecutionException, InterruptedException, TimeoutException {
+    @Channel("channel-example")
+    Multi<String> events;
+
+    public void initialize(@Observes StartupEvent ev) {
 
         // generate events
-        for(int i = 0; i < AMOUNT_EVENTS; i++) {
-            kafkaProducer.send(new ProducerRecord<>(TOPIC, UUID.randomUUID().toString(), UUID.randomUUID().toString())).get(5, TimeUnit.SECONDS);
-        }
+        Multi.createFrom().ticks().every(Duration.ofMillis(100)).subscribe().with(i ->{
+            emitter.send("" + i).whenComplete(handlerEmitterResponse(KafkaPoc.class.getName()));
+        });
 
-        // consume 3 events per second
+        // consume 3 events per second (sync impl example)
         AtomicInteger eventsCount = new AtomicInteger();
         kafkaConsumer.subscribe(Collections.singleton(TOPIC));
         new Thread(() -> {
@@ -83,5 +88,23 @@ public class KafkaPoc {
                 kafkaConsumer.close();
             }
         }).start();
+
+        // consume 3 events per second (async impl example)
+         events
+                .ifNoItem().after(Duration.ofMillis(20000)).fail()
+                .onFailure().retry().withBackOff(Duration.ofSeconds(2), Duration.ofSeconds(10)).indefinitely()
+                .group().intoLists().of(3, Duration.ofSeconds(1))
+                 .call(() -> Uni.createFrom().nullItem().onItem().delayIt().by(Duration.ofMillis(3000)))
+                .onItem().transformToMultiAndConcatenate(l -> Multi.createFrom().iterable(l))
+                .subscribe().with(LOG::info);
+    }
+
+    @NotNull
+    private BiConsumer<Void, Throwable> handlerEmitterResponse(final String owner) {
+        return (success, failure) -> {
+            if (failure != null) {
+                LOG.error(String.format("D'oh! %s", failure.getMessage()));
+            }
+        };
     }
 }
